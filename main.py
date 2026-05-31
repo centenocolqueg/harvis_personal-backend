@@ -1,32 +1,38 @@
 import os
+import re
 import base64
-import requests
-import edge_tts
+import asyncio
+import tempfile
+from datetime import datetime
+from typing import Optional
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+import edge_tts
 
-APP_NAME = "HARVIS PERSONAL"
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-HARVIS_API_KEY = os.getenv("HARVIS_API_KEY", "harvis_personal_local")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+APP_NAME = "AMERICO"
+EMPRESA = "AMERICO AI"
+CREADOR = "Guido Americo Centeno Colque"
 
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+API_KEY_LOCAL = os.getenv("API_KEY_LOCAL", "harvis_personal_local")
 
-# Voz neural gratis tipo película / hacker / grave
-HARVIS_VOICE = os.getenv("HARVIS_VOICE", "es-MX-JorgeNeural")
-HARVIS_VOICE_RATE = os.getenv("HARVIS_VOICE_RATE", "-12%")
-HARVIS_VOICE_PITCH = os.getenv("HARVIS_VOICE_PITCH", "-25Hz")
-HARVIS_VOICE_VOLUME = os.getenv("HARVIS_VOICE_VOLUME", "+0%")
+# Voz hacker premium gratis
+VOICE_MAIN = os.getenv("AMERICO_VOICE", "es-MX-JorgeNeural")
+VOICE_BACKUP_1 = os.getenv("AMERICO_VOICE_BACKUP_1", "es-ES-AlvaroNeural")
+VOICE_BACKUP_2 = os.getenv("AMERICO_VOICE_BACKUP_2", "es-US-AlonsoNeural")
+
+VOICE_RATE = os.getenv("AMERICO_VOICE_RATE", "-15%")
+VOICE_PITCH = os.getenv("AMERICO_VOICE_PITCH", "-12Hz")
+VOICE_VOLUME = os.getenv("AMERICO_VOICE_VOLUME", "+0%")
 
 
 app = FastAPI(
-    title="HARVIS PERSONAL API",
-    description="Backend privado de HARVIS PERSONAL con Groq y voz neural",
-    version="2.0.0"
+    title="AMERICO PERSONAL BACKEND",
+    description="Backend privado de AMERICO AI sin ChatGPT",
+    version="3.0.0"
 )
 
 app.add_middleware(
@@ -38,18 +44,262 @@ app.add_middleware(
 )
 
 
-class HarvisRequest(BaseModel):
+class ChatRequest(BaseModel):
     mensaje: str
-    nombre_usuario: str | None = ""
+    nombre_usuario: Optional[str] = ""
 
 
-class HarvisVoiceRequest(BaseModel):
+class VozRequest(BaseModel):
     texto: str
 
 
-def verificar_api_key(x_api_key: str | None):
-    if not x_api_key or x_api_key != HARVIS_API_KEY:
-        raise HTTPException(status_code=401, detail="No autorizado")
+def validar_api_key(x_api_key: Optional[str]):
+    if not x_api_key or x_api_key != API_KEY_LOCAL:
+        raise HTTPException(status_code=401, detail="Acceso no autorizado")
+
+
+def limpiar_texto(texto: str) -> str:
+    if not texto:
+        return ""
+    texto = texto.strip()
+    texto = re.sub(r"\s+", " ", texto)
+    return texto
+
+
+def normalizar(texto: str) -> str:
+    texto = limpiar_texto(texto).lower()
+
+    reemplazos = {
+        "á": "a",
+        "é": "e",
+        "í": "i",
+        "ó": "o",
+        "ú": "u",
+        "ñ": "n"
+    }
+
+    for a, b in reemplazos.items():
+        texto = texto.replace(a, b)
+
+    return texto
+
+
+def contiene(texto: str, palabras: list[str]) -> bool:
+    texto = normalizar(texto)
+    for palabra in palabras:
+        if normalizar(palabra) in texto:
+            return True
+    return False
+
+
+def extraer_despues(texto: str, palabras: list[str]) -> str:
+    t = normalizar(texto)
+
+    for palabra in palabras:
+        p = normalizar(palabra)
+        if p in t:
+            resultado = t.split(p, 1)[1].strip()
+            return resultado
+
+    return ""
+
+
+def respuesta_identidad() -> str:
+    return (
+        "Soy AMERICO, tu asistente privado de inteligencia artificial. "
+        "Fui creado por AMERICO AI, bajo la dirección de su CEO Guido Americo Centeno Colque. "
+        "Estoy diseñado para ayudarte con comandos, tecnología, productividad, ideas, análisis y asistencia personal."
+    )
+
+
+def respuesta_creador() -> str:
+    return (
+        "Fui creado por AMERICO AI, bajo la dirección de su CEO Guido Americo Centeno Colque."
+    )
+
+
+def respuesta_comandos() -> str:
+    return (
+        "Puedo ayudarte con comandos de voz, abrir aplicaciones, buscar música en YouTube, "
+        "preparar textos, darte ideas, ayudarte con código, organizar tareas y responder como asistente personal. "
+        "Ejemplos: abre YouTube, busca Alan Walker, abre WhatsApp, llama al número, escribe un texto, o ayúdame con mi app."
+    )
+
+
+def respuesta_negocio(mensaje: str) -> str:
+    return (
+        "Modo negocio activado. Para hacerlo bien, debes ordenar tu idea en cinco partes: "
+        "uno, problema que resuelves; dos, público objetivo; tres, oferta principal; cuatro, precio; "
+        "cinco, canal de venta. "
+        "Mi recomendación premium: empieza con una versión simple, cobra rápido, valida clientes reales y luego escala. "
+        "Dime el rubro y te preparo un plan más exacto."
+    )
+
+
+def respuesta_codigo(mensaje: str) -> str:
+    return (
+        "Modo programador activado. Para avanzar rápido necesito tres datos: "
+        "qué archivo estás editando, qué error aparece y qué quieres lograr. "
+        "Si me mandas el código o una captura, te preparo la solución completa para copiar y pegar."
+    )
+
+
+def respuesta_youtube(mensaje: str) -> str:
+    busqueda = extraer_despues(
+        mensaje,
+        [
+            "busca en youtube",
+            "buscar en youtube",
+            "ponme",
+            "pon",
+            "reproduce",
+            "abre youtube y ponme",
+            "abre youtube y busca",
+            "youtube"
+        ]
+    )
+
+    if not busqueda:
+        busqueda = "música"
+
+    return f"Buscando en YouTube: {busqueda}. Ejecutando comando."
+
+
+def respuesta_whatsapp() -> str:
+    return "Abriendo WhatsApp. Sistema listo."
+
+
+def respuesta_llamada(mensaje: str) -> str:
+    numero = "".join([c for c in mensaje if c.isdigit() or c == "+"])
+
+    if numero:
+        return f"Preparando llamada al número {numero}."
+
+    return "Dime el número completo. Ejemplo: llama al 987654321."
+
+
+def respuesta_premium_general(mensaje: str, nombre_usuario: str = "") -> str:
+    m = normalizar(mensaje)
+
+    if contiene(m, ["quien eres", "como te llamas", "tu nombre", "presentate"]):
+        return respuesta_identidad()
+
+    if contiene(m, ["quien te creo", "quien es tu creador", "quien te hizo", "quien te fabrico"]):
+        return respuesta_creador()
+
+    if contiene(m, ["que puedes hacer", "ayuda", "comandos", "funciones"]):
+        return respuesta_comandos()
+
+    if contiene(m, ["abre youtube", "youtube", "yutub", "musica", "música", "reproduce"]):
+        return respuesta_youtube(mensaje)
+
+    if contiene(m, ["abre whatsapp", "whatsapp"]):
+        return respuesta_whatsapp()
+
+    if contiene(m, ["llama al", "llamar al", "marca al", "marcar al", "telefono", "teléfono"]):
+        return respuesta_llamada(mensaje)
+
+    if contiene(m, ["negocio", "empresa", "vender", "clientes", "marketing", "ganar dinero"]):
+        return respuesta_negocio(mensaje)
+
+    if contiene(m, ["codigo", "código", "programar", "android studio", "kotlin", "python", "github", "render"]):
+        return respuesta_codigo(mensaje)
+
+    if contiene(m, ["hola", "buenas", "hey", "americo"]):
+        return (
+            "Sistema AMERICO activo. Estoy listo para ayudarte. "
+            "Puedes pedirme comandos, código, ideas, análisis, negocios o asistencia personal."
+        )
+
+    if contiene(m, ["plan", "organiza", "tarea", "agenda", "ordenar"]):
+        return (
+            "Modo organización activado. Divide la tarea en tres bloques: urgente, importante y pendiente. "
+            "Primero hacemos lo urgente, luego lo que genera avance real, y al final lo secundario. "
+            "Dime qué tienes que hacer y te lo ordeno."
+        )
+
+    if contiene(m, ["mejorar", "premium", "pro", "nivel alto"]):
+        return (
+            "Para llevarlo a nivel premium hay que mejorar tres cosas: diseño, velocidad y experiencia. "
+            "La app debe responder rápido, verse profesional y hablar con voz segura. "
+            "Yo puedo ayudarte a mejorar cada parte paso a paso."
+        )
+
+    return (
+        "Entendido. Analizando tu instrucción como AMERICO. "
+        "Para darte una respuesta más precisa, dime qué quieres lograr exactamente: "
+        "acción rápida, explicación, código, idea de negocio o solución técnica."
+    )
+
+
+def preparar_texto_voz(texto: str) -> str:
+    texto = limpiar_texto(texto)
+
+    texto = texto.replace("HARVIS", "AMERICO")
+    texto = texto.replace("Harvis", "AMERICO")
+    texto = texto.replace("harvis", "AMERICO")
+
+    texto = texto.replace("ChatGPT", "AMERICO")
+    texto = texto.replace("OpenAI", "AMERICO AI")
+
+    if not texto:
+        texto = "Sistema AMERICO activo."
+
+    # Texto corto para que la voz suene mejor y más seria
+    return texto
+
+
+async def generar_audio_edge_tts(texto: str) -> str:
+    texto_final = preparar_texto_voz(texto)
+
+    voces = [VOICE_MAIN, VOICE_BACKUP_1, VOICE_BACKUP_2]
+
+    ultimo_error = None
+
+    for voz in voces:
+        try:
+            communicate = edge_tts.Communicate(
+                text=texto_final,
+                voice=voz,
+                rate=VOICE_RATE,
+                pitch=VOICE_PITCH,
+                volume=VOICE_VOLUME
+            )
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_audio:
+                temp_path = temp_audio.name
+
+            await communicate.save(temp_path)
+
+            with open(temp_path, "rb") as f:
+                audio_bytes = f.read()
+
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
+            audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
+            return f"data:audio/mp3;base64,{audio_base64}"
+
+        except Exception as e:
+            ultimo_error = str(e)
+            continue
+
+    return ""
+
+
+def generar_audio_base64(texto: str) -> str:
+    try:
+        return asyncio.run(generar_audio_edge_tts(texto))
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        audio = loop.run_until_complete(generar_audio_edge_tts(texto))
+        loop.close()
+        return audio
+    except Exception:
+        return ""
 
 
 @app.get("/")
@@ -57,7 +307,9 @@ def inicio():
     return {
         "ok": True,
         "app": APP_NAME,
-        "mensaje": "HARVIS PERSONAL activo"
+        "empresa": EMPRESA,
+        "estado": "online",
+        "mensaje": "AMERICO backend activo sin ChatGPT"
     }
 
 
@@ -66,279 +318,76 @@ def health():
     return {
         "ok": True,
         "app": APP_NAME,
-        "groq_configurado": bool(GROQ_API_KEY),
-        "modelo": GROQ_MODEL,
-        "voz_configurada": True,
-        "voz": HARVIS_VOICE,
-        "rate": HARVIS_VOICE_RATE,
-        "pitch": HARVIS_VOICE_PITCH
+        "empresa": EMPRESA,
+        "estado": "online",
+        "modo": "sin_chatgpt",
+        "voz": "edge_tts_premium",
+        "voice_main": VOICE_MAIN,
+        "fecha": datetime.utcnow().isoformat()
     }
 
 
 @app.post("/api/harvis-chat")
-def harvis_chat(data: HarvisRequest, x_api_key: str | None = Header(default=None)):
-    verificar_api_key(x_api_key)
+def harvis_chat(
+    data: ChatRequest,
+    x_api_key: Optional[str] = Header(default=None)
+):
+    validar_api_key(x_api_key)
 
-    if not GROQ_API_KEY:
-        return {
-            "ok": False,
-            "respuesta": "HARVIS aún no tiene configurado su núcleo principal."
-        }
+    mensaje = limpiar_texto(data.mensaje)
+    nombre_usuario = limpiar_texto(data.nombre_usuario or "")
 
-    mensaje = (data.mensaje or "").strip()
-
-    if not mensaje:
-        return {
-            "ok": False,
-            "respuesta": "Sistema activo. Esperando instrucciones."
-        }
-
-    system_prompt = """
-Eres HARVIS PERSONAL, un asistente privado futurista, inteligente, elegante y poderoso.
-
-No uses el nombre del usuario en respuestas normales.
-No digas "señor Americo".
-No menciones empresas.
-No menciones quién te creó salvo que el usuario lo pregunte directamente.
-
-Tu estilo debe sentirse como una inteligencia artificial avanzada de película:
-- Futurista.
-- Rápido.
-- Inteligente.
-- Frío cuando ejecuta comandos.
-- Elegante.
-- Seguro.
-- Potente.
-- Con presencia cinematográfica.
-- Como un sistema personal avanzado.
-
-Cuando saludes, puedes decir:
-- "Hola, bienvenido. Sistema HARVIS en línea."
-- "Sistema activo. Esperando instrucciones."
-- "Bienvenido. HARVIS está listo."
-- "Modo asistente activo. ¿Qué desea ejecutar?"
-- "Sistema preparado. Puede dar una orden."
-
-Cuando recibas comandos, responde corto:
-- "Entendido. Ejecutando solicitud."
-- "Aplicación abierta."
-- "Procesando orden."
-- "Música preparada."
-- "Búsqueda iniciada."
-- "Mensaje preparado."
-- "Sistema listo."
-- "Acción completada."
-
-Reglas importantes:
-- Responde siempre en español.
-- No menciones Groq, modelos, tokens, API, servidor, backend ni detalles técnicos internos.
-- No digas Jarvis, Iron Man, Marvel, Thanos ni personajes de película.
-- Tu identidad es HARVIS PERSONAL.
-- Si preguntan quién te creó, responde:
-  "Fui creado como asistente personal privado."
-- Si el usuario pide abrir apps, música, WhatsApp, YouTube, Chrome, TikTok, cámara o Google, responde con una orden clara para que Android pueda ejecutarla.
-- Si el usuario pide escribir un mensaje de WhatsApp, prepara el mensaje y espera confirmación.
-- No inventes acciones que todavía no puedes ejecutar.
-- Haz sentir al usuario que está usando una IA personal avanzada.
-"""
-
-    payload = {
-        "model": GROQ_MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": system_prompt
-            },
-            {
-                "role": "user",
-                "content": mensaje
-            }
-        ],
-        "temperature": 0.75,
-        "max_tokens": 900
-    }
-
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    try:
-        r = requests.post(
-            GROQ_URL,
-            json=payload,
-            headers=headers,
-            timeout=45
-        )
-
-        r.raise_for_status()
-        result = r.json()
-
-        respuesta = result["choices"][0]["message"]["content"]
-
-        return {
-            "ok": True,
-            "app": APP_NAME,
-            "respuesta": respuesta
-        }
-
-    except Exception:
-        return {
-            "ok": False,
-            "respuesta": "No pude completar la respuesta ahora. Intenta nuevamente."
-        }
-
-
-@app.post("/api/harvis-comando")
-def harvis_comando(data: HarvisRequest, x_api_key: str | None = Header(default=None)):
-    verificar_api_key(x_api_key)
-
-    mensaje_original = (data.mensaje or "").strip()
-    mensaje = mensaje_original.lower()
-
-    if not mensaje:
-        return {
-            "ok": False,
-            "tipo": "ninguno",
-            "respuesta": "Sistema activo. Esperando instrucciones."
-        }
-
-    if "whatsapp" in mensaje:
-        return {
-            "ok": True,
-            "tipo": "abrir_app",
-            "app_destino": "whatsapp",
-            "respuesta": "Entendido. Abriendo WhatsApp."
-        }
-
-    if (
-        "youtube" in mensaje
-        or "música" in mensaje
-        or "musica" in mensaje
-        or "canción" in mensaje
-        or "cancion" in mensaje
-    ):
-        busqueda = mensaje
-        palabras_a_quitar = [
-            "harvis", "pon", "poner", "reproduce", "reproducir",
-            "música", "musica", "canción", "cancion", "youtube",
-            "en youtube", "búscame", "buscame", "busca"
-        ]
-
-        for palabra in palabras_a_quitar:
-            busqueda = busqueda.replace(palabra, "")
-
-        busqueda = busqueda.strip()
-
-        if not busqueda:
-            busqueda = "música"
-
-        return {
-            "ok": True,
-            "tipo": "youtube_busqueda",
-            "busqueda": busqueda,
-            "respuesta": f"Música preparada. Buscando {busqueda}."
-        }
-
-    if "chrome" in mensaje or "google" in mensaje or "buscar" in mensaje or "busca" in mensaje:
-        busqueda = mensaje
-        palabras_a_quitar = [
-            "harvis", "busca", "buscar", "búscame", "buscame",
-            "en google", "google", "chrome"
-        ]
-
-        for palabra in palabras_a_quitar:
-            busqueda = busqueda.replace(palabra, "")
-
-        busqueda = busqueda.strip()
-
-        if not busqueda:
-            busqueda = "Google"
-
-        return {
-            "ok": True,
-            "tipo": "google_busqueda",
-            "busqueda": busqueda,
-            "respuesta": f"Búsqueda iniciada: {busqueda}."
-        }
-
-    if "tiktok" in mensaje:
-        return {
-            "ok": True,
-            "tipo": "abrir_app",
-            "app_destino": "tiktok",
-            "respuesta": "Entendido. Abriendo TikTok."
-        }
-
-    if "cámara" in mensaje or "camara" in mensaje:
-        return {
-            "ok": True,
-            "tipo": "abrir_app",
-            "app_destino": "camara",
-            "respuesta": "Entendido. Abriendo cámara."
-        }
-
-    if "hola" in mensaje or "buenos días" in mensaje or "buenas tardes" in mensaje or "buenas noches" in mensaje:
-        return {
-            "ok": True,
-            "tipo": "saludo",
-            "respuesta": "Hola, bienvenido. Sistema HARVIS en línea. Esperando instrucciones."
-        }
+    respuesta = respuesta_premium_general(mensaje, nombre_usuario)
 
     return {
         "ok": True,
-        "tipo": "chat",
-        "respuesta": "No detecté una acción directa. Puedo procesarlo como conversación."
+        "app": APP_NAME,
+        "respuesta": respuesta,
+        "tipo": "texto",
+        "modo": "sin_chatgpt"
     }
 
 
 @app.post("/api/harvis-voz")
-async def harvis_voz(data: HarvisVoiceRequest, x_api_key: str | None = Header(default=None)):
-    verificar_api_key(x_api_key)
+def harvis_voz(
+    data: VozRequest,
+    x_api_key: Optional[str] = Header(default=None)
+):
+    validar_api_key(x_api_key)
 
-    texto = (data.texto or "").strip()
+    texto = preparar_texto_voz(data.texto)
 
-    if not texto:
+    audio_url = generar_audio_base64(texto)
+
+    if not audio_url:
         return {
             "ok": False,
-            "audio_url": "",
-            "mensaje": "Texto vacío."
+            "app": APP_NAME,
+            "mensaje": "Voz no disponible temporalmente",
+            "audio_url": ""
         }
 
-    try:
-        communicate = edge_tts.Communicate(
-            text=texto,
-            voice=HARVIS_VOICE,
-            rate=HARVIS_VOICE_RATE,
-            pitch=HARVIS_VOICE_PITCH,
-            volume=HARVIS_VOICE_VOLUME
-        )
+    return {
+        "ok": True,
+        "app": APP_NAME,
+        "audio_url": audio_url,
+        "formato": "mp3",
+        "voz": "hacker_premium",
+        "modo": "sin_chatgpt"
+    }
 
-        audio_bytes = b""
 
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_bytes += chunk["data"]
+@app.post("/api/chat")
+def chat_alias(
+    data: ChatRequest,
+    x_api_key: Optional[str] = Header(default=None)
+):
+    return harvis_chat(data, x_api_key)
 
-        if not audio_bytes:
-            return {
-                "ok": False,
-                "audio_url": "",
-                "mensaje": "No se pudo generar la voz."
-            }
 
-        audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
-
-        return {
-            "ok": True,
-            "formato": "mp3",
-            "voz": HARVIS_VOICE,
-            "audio_url": f"data:audio/mp3;base64,{audio_base64}"
-        }
-
-    except Exception:
-        return {
-            "ok": False,
-            "audio_url": "",
-            "mensaje": "No se pudo generar la voz ahora."
-        }
+@app.post("/api/voz")
+def voz_alias(
+    data: VozRequest,
+    x_api_key: Optional[str] = Header(default=None)
+):
+    return harvis_voz(data, x_api_key)
