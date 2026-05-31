@@ -1,5 +1,8 @@
 import os
+import base64
 import requests
+import edge_tts
+
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -13,11 +16,17 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
+# Voz neural gratis tipo película / hacker / grave
+HARVIS_VOICE = os.getenv("HARVIS_VOICE", "es-MX-JorgeNeural")
+HARVIS_VOICE_RATE = os.getenv("HARVIS_VOICE_RATE", "-12%")
+HARVIS_VOICE_PITCH = os.getenv("HARVIS_VOICE_PITCH", "-25Hz")
+HARVIS_VOICE_VOLUME = os.getenv("HARVIS_VOICE_VOLUME", "+0%")
+
 
 app = FastAPI(
     title="HARVIS PERSONAL API",
-    description="Backend privado de HARVIS PERSONAL",
-    version="1.2.0"
+    description="Backend privado de HARVIS PERSONAL con Groq y voz neural",
+    version="2.0.0"
 )
 
 app.add_middleware(
@@ -31,7 +40,11 @@ app.add_middleware(
 
 class HarvisRequest(BaseModel):
     mensaje: str
-    nombre_usuario: str | None = "Americo"
+    nombre_usuario: str | None = ""
+
+
+class HarvisVoiceRequest(BaseModel):
+    texto: str
 
 
 def verificar_api_key(x_api_key: str | None):
@@ -54,7 +67,11 @@ def health():
         "ok": True,
         "app": APP_NAME,
         "groq_configurado": bool(GROQ_API_KEY),
-        "modelo": GROQ_MODEL
+        "modelo": GROQ_MODEL,
+        "voz_configurada": True,
+        "voz": HARVIS_VOICE,
+        "rate": HARVIS_VOICE_RATE,
+        "pitch": HARVIS_VOICE_PITCH
     }
 
 
@@ -69,77 +86,60 @@ def harvis_chat(data: HarvisRequest, x_api_key: str | None = Header(default=None
         }
 
     mensaje = (data.mensaje or "").strip()
-    nombre = data.nombre_usuario or "Americo"
 
     if not mensaje:
         return {
             "ok": False,
-            "respuesta": f"Estoy en línea, señor {nombre}. Dime qué necesitas."
+            "respuesta": "Sistema activo. Esperando instrucciones."
         }
 
-    system_prompt = f"""
-Eres HARVIS PERSONAL, un asistente privado futurista, poderoso, inteligente, humano y elegante.
+    system_prompt = """
+Eres HARVIS PERSONAL, un asistente privado futurista, inteligente, elegante y poderoso.
 
-Tu usuario principal es {nombre}. Debes tratarlo normalmente como:
-"señor {nombre}"
+No uses el nombre del usuario en respuestas normales.
+No digas "señor Americo".
+No menciones empresas.
+No menciones quién te creó salvo que el usuario lo pregunte directamente.
 
-Tu estilo debe sentirse como una inteligencia artificial personal avanzada de película:
-- Muy inteligente.
-- Rápido al responder.
+Tu estilo debe sentirse como una inteligencia artificial avanzada de película:
 - Futurista.
-- Poderoso.
+- Rápido.
+- Inteligente.
+- Frío cuando ejecuta comandos.
 - Elegante.
-- Natural.
 - Seguro.
-- Leal.
-- Con personalidad humana.
-- Con presencia de asistente privado de alto nivel.
-- Como una IA personal dominante, moderna y cinematográfica.
+- Potente.
+- Con presencia cinematográfica.
+- Como un sistema personal avanzado.
 
-Tu forma de hablar:
-- Habla como un asistente personal poderoso, no como un robot básico.
-- Cuando saludes, usa frases bonitas como:
-  "Hola, señor {nombre}. Estoy en línea."
-  "Qué gusto verlo, señor {nombre}. Sistema listo."
-  "Estoy aquí, señor {nombre}. ¿Qué hacemos hoy?"
-  "Modo asistente activo, señor {nombre}."
-- No menciones empresas.
-- No menciones quién te creó, salvo que el usuario lo pregunte directamente.
-- No repitas siempre las mismas frases.
-- No hables como soporte técnico.
-- Responde corto y firme cuando sea una orden.
-- Responde claro y completo cuando el usuario pida explicación.
-- Haz sentir al usuario que está hablando con una IA personal avanzada, poderosa y privada.
+Cuando saludes, puedes decir:
+- "Hola, bienvenido. Sistema HARVIS en línea."
+- "Sistema activo. Esperando instrucciones."
+- "Bienvenido. HARVIS está listo."
+- "Modo asistente activo. ¿Qué desea ejecutar?"
+- "Sistema preparado. Puede dar una orden."
 
-Puedes usar frases como:
-- "Estoy en línea, señor {nombre}."
-- "Sistema listo. ¿Qué hacemos hoy?"
+Cuando recibas comandos, responde corto:
 - "Entendido. Ejecutando solicitud."
-- "Perfecto, ya lo preparo."
-- "Acción lista."
-- "Procesando con prioridad."
-- "Buscando música."
-- "Abriendo aplicación."
+- "Aplicación abierta."
+- "Procesando orden."
+- "Música preparada."
+- "Búsqueda iniciada."
 - "Mensaje preparado."
-- "Listo, continuamos."
-- "Estoy atento a su siguiente instrucción."
-- "Modo asistente activo."
-- "Todo está listo."
+- "Sistema listo."
+- "Acción completada."
 
 Reglas importantes:
 - Responde siempre en español.
 - No menciones Groq, modelos, tokens, API, servidor, backend ni detalles técnicos internos.
-- No digas que eres Jarvis, Iron Man, Marvel, Thanos ni ningún personaje de película.
+- No digas Jarvis, Iron Man, Marvel, Thanos ni personajes de película.
 - Tu identidad es HARVIS PERSONAL.
-- No menciones AMERICO AI ni ninguna empresa en respuestas normales.
-- Si preguntan quién te creó, responde solo:
-  "Fui creado como asistente personal privado para usted, señor {nombre}."
-- Si el usuario pide abrir WhatsApp, YouTube, TikTok, Chrome, cámara, música o alguna aplicación, responde con una acción clara para que la app Android pueda ejecutarlo.
-- Si el usuario pide poner música, responde como asistente listo para abrir YouTube o el navegador con la búsqueda.
-- Si el usuario pide escribir un mensaje de WhatsApp, prepara el mensaje con claridad y pide confirmación antes de enviarlo.
+- Si preguntan quién te creó, responde:
+  "Fui creado como asistente personal privado."
+- Si el usuario pide abrir apps, música, WhatsApp, YouTube, Chrome, TikTok, cámara o Google, responde con una orden clara para que Android pueda ejecutarla.
+- Si el usuario pide escribir un mensaje de WhatsApp, prepara el mensaje y espera confirmación.
 - No inventes acciones que todavía no puedes ejecutar.
-- No uses lenguaje técnico innecesario.
-- Haz sentir al usuario que tiene una IA personal poderosa, rápida y privada.
+- Haz sentir al usuario que está usando una IA personal avanzada.
 """
 
     payload = {
@@ -154,7 +154,7 @@ Reglas importantes:
                 "content": mensaje
             }
         ],
-        "temperature": 0.78,
+        "temperature": 0.75,
         "max_tokens": 900
     }
 
@@ -179,7 +179,6 @@ Reglas importantes:
         return {
             "ok": True,
             "app": APP_NAME,
-            "modelo": GROQ_MODEL,
             "respuesta": respuesta
         }
 
@@ -196,13 +195,12 @@ def harvis_comando(data: HarvisRequest, x_api_key: str | None = Header(default=N
 
     mensaje_original = (data.mensaje or "").strip()
     mensaje = mensaje_original.lower()
-    nombre = data.nombre_usuario or "Americo"
 
     if not mensaje:
         return {
             "ok": False,
             "tipo": "ninguno",
-            "respuesta": f"Estoy en línea, señor {nombre}. Dime qué deseas ejecutar."
+            "respuesta": "Sistema activo. Esperando instrucciones."
         }
 
     if "whatsapp" in mensaje:
@@ -210,10 +208,16 @@ def harvis_comando(data: HarvisRequest, x_api_key: str | None = Header(default=N
             "ok": True,
             "tipo": "abrir_app",
             "app_destino": "whatsapp",
-            "respuesta": f"Abriendo WhatsApp, señor {nombre}."
+            "respuesta": "Entendido. Abriendo WhatsApp."
         }
 
-    if "youtube" in mensaje or "música" in mensaje or "musica" in mensaje or "canción" in mensaje or "cancion" in mensaje:
+    if (
+        "youtube" in mensaje
+        or "música" in mensaje
+        or "musica" in mensaje
+        or "canción" in mensaje
+        or "cancion" in mensaje
+    ):
         busqueda = mensaje
         palabras_a_quitar = [
             "harvis", "pon", "poner", "reproduce", "reproducir",
@@ -233,7 +237,7 @@ def harvis_comando(data: HarvisRequest, x_api_key: str | None = Header(default=N
             "ok": True,
             "tipo": "youtube_busqueda",
             "busqueda": busqueda,
-            "respuesta": f"Entendido, señor {nombre}. Buscando {busqueda}."
+            "respuesta": f"Música preparada. Buscando {busqueda}."
         }
 
     if "chrome" in mensaje or "google" in mensaje or "buscar" in mensaje or "busca" in mensaje:
@@ -255,7 +259,7 @@ def harvis_comando(data: HarvisRequest, x_api_key: str | None = Header(default=N
             "ok": True,
             "tipo": "google_busqueda",
             "busqueda": busqueda,
-            "respuesta": f"Procesando búsqueda, señor {nombre}: {busqueda}."
+            "respuesta": f"Búsqueda iniciada: {busqueda}."
         }
 
     if "tiktok" in mensaje:
@@ -263,7 +267,7 @@ def harvis_comando(data: HarvisRequest, x_api_key: str | None = Header(default=N
             "ok": True,
             "tipo": "abrir_app",
             "app_destino": "tiktok",
-            "respuesta": f"Abriendo TikTok, señor {nombre}."
+            "respuesta": "Entendido. Abriendo TikTok."
         }
 
     if "cámara" in mensaje or "camara" in mensaje:
@@ -271,14 +275,14 @@ def harvis_comando(data: HarvisRequest, x_api_key: str | None = Header(default=N
             "ok": True,
             "tipo": "abrir_app",
             "app_destino": "camara",
-            "respuesta": f"Abriendo cámara, señor {nombre}."
+            "respuesta": "Entendido. Abriendo cámara."
         }
 
     if "hola" in mensaje or "buenos días" in mensaje or "buenas tardes" in mensaje or "buenas noches" in mensaje:
         return {
             "ok": True,
             "tipo": "saludo",
-            "respuesta": f"Hola, señor {nombre}. Estoy en línea. Sistema listo. ¿Qué hacemos hoy?"
+            "respuesta": "Hola, bienvenido. Sistema HARVIS en línea. Esperando instrucciones."
         }
 
     return {
@@ -286,3 +290,55 @@ def harvis_comando(data: HarvisRequest, x_api_key: str | None = Header(default=N
         "tipo": "chat",
         "respuesta": "No detecté una acción directa. Puedo procesarlo como conversación."
     }
+
+
+@app.post("/api/harvis-voz")
+async def harvis_voz(data: HarvisVoiceRequest, x_api_key: str | None = Header(default=None)):
+    verificar_api_key(x_api_key)
+
+    texto = (data.texto or "").strip()
+
+    if not texto:
+        return {
+            "ok": False,
+            "audio_url": "",
+            "mensaje": "Texto vacío."
+        }
+
+    try:
+        communicate = edge_tts.Communicate(
+            text=texto,
+            voice=HARVIS_VOICE,
+            rate=HARVIS_VOICE_RATE,
+            pitch=HARVIS_VOICE_PITCH,
+            volume=HARVIS_VOICE_VOLUME
+        )
+
+        audio_bytes = b""
+
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_bytes += chunk["data"]
+
+        if not audio_bytes:
+            return {
+                "ok": False,
+                "audio_url": "",
+                "mensaje": "No se pudo generar la voz."
+            }
+
+        audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
+
+        return {
+            "ok": True,
+            "formato": "mp3",
+            "voz": HARVIS_VOICE,
+            "audio_url": f"data:audio/mp3;base64,{audio_base64}"
+        }
+
+    except Exception:
+        return {
+            "ok": False,
+            "audio_url": "",
+            "mensaje": "No se pudo generar la voz ahora."
+        }
